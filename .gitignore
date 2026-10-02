@@ -1,0 +1,34 @@
+# Compilación y paquetes Maven
+**/target/
+target/
+!.mvn/wrapper/maven-wrapper.jar
+
+# Logs
+*.log
+
+# Archivos del sistema operativo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDEs y Editores
+.idea/
+*.iws
+*.iml
+*.ipr
+.vscode/
+*.code-workspace
+.apt_generated/
+.classpath
+.factorypath
+.project
+.settings/
+.springBeans
+.sts4-cache/
+
+# Archivos de datos o temporales
+*.tmp
+*.bak
+
+# Archivos de evidencia de pruebas
+/Evidencias/
