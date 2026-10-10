@@ -64,6 +64,44 @@ services:
     networks:
       - banco-network
 
+  batch-service:
+    build:
+      context: ./batch-service
+      dockerfile: Dockerfile
+    container_name: batch-service
+    ports:
+      - "8083:8083"
+    networks:
+      - banco-network
+
+  bff-service:
+    build:
+      context: ./bff-service
+      dockerfile: Dockerfile
+    container_name: bff-service
+    ports:
+      - "8080:8080"
+    environment:
+      - SERVICES_ACCOUNT_URL=http://account-service:8081
+      - SERVICES_TRANSFER_URL=http://transfer-service:8082
+      - SERVICES_CUSTOMER_URL=http://customer-service:8084
+      - SERVICES_AUTH_URL=http://auth-service:9000
+    depends_on:
+      - account-service
+      - customer-service
+    networks:
+      - banco-network
+
+  customer-service:
+    build:
+      context: ./customer-service
+      dockerfile: Dockerfile
+    container_name: customer-service
+    ports:
+      - "8084:8084"
+    networks:
+      - banco-network
+
 networks:
   banco-network:
     driver: bridge

@@ -1,56 +1,79 @@
 # Banco XYZ - Arquitectura Cloud Native y Microservicios
 
-Sistema transaccional bancario distribuido basado en arquitectura de microservicios con **Spring Boot**, **OAuth 2.0**, **Resilience4j**, **Apache Kafka** y orquestación en contenedores con **Docker Compose**.
+Sistema transaccional bancario distribuido basado en arquitectura de microservicios con **Spring Boot**, **OAuth 2.0 / JWT**, **Backend for Frontend (BFF)**, **Spring Batch**, **Resilience4j**, **Apache Kafka** y orquestación integral en contenedores con **Docker Compose**.
 
 ---
 
 ## 🏛️ Arquitectura del Sistema
 
-El ecosistema está compuesto por cuatro componentes desplegados en una red interna (`banco-network`):
+El ecosistema está compuesto por siete componentes desplegados en una red interna (`banco-network`):
 
 ```
-                        [ Cliente / Postman ]
-                                  │
-                   (Bearer JWT)   │   (Solicitud TX)
-                                  ▼
- ┌─────────────────┐     ┌───────────────────┐     ┌─────────────────┐
- │   auth-service  │◄────│  transfer-service │────►│ account-service │
- │ (OAuth2 Server) │     │   (Orquestador)   │ CB  │ (JPA / H2 / CSV)│
- └─────────────────┘     └─────────┬─────────┘     └─────────────────┘
-                                   │
-                                   │ (Publicación de Eventos)
-                                   ▼
-                         ┌───────────────────┐
-                         │   Apache Kafka    │
-                         │   (Modo KRaft)    │
-                         └───────────────────┘
+                               [ Clientes Multicanal / Postman ]
+                                              │
+                                              ▼
+                                  ┌───────────────────────┐
+                                  │      bff-service      │ (Puerto 8080)
+                                  │  (Web / Móvil / ATM)  │
+                                  └───────────┬───────────┘
+                                              │
+             ┌────────────────────────────────┼────────────────────────────────┐
+             │ (Propagación Bearer Token)     │                                │
+             ▼                                ▼                                ▼
+   ┌───────────────────┐            ┌───────────────────┐            ┌───────────────────┐
+   │   auth-service    │            │  account-service  │            │ customer-service  │
+   │  (Puerto 9000)    │            │   (Puerto 8081)   │            │   (Puerto 8084)   │
+   │ (OAuth2 / JWKS)   │            │  (JPA / H2 / CSV) │            │ (Maestro Clientes)│
+   └───────────────────┘            └─────────▲─────────┘            └───────────────────┘
+                                              │
+                                              │ (Verificación de Saldo / CB)
+                                              │
+                                    ┌─────────┴─────────┐            ┌───────────────────┐
+                                    │ transfer-service  │            │   batch-service   │
+                                    │   (Puerto 8082)   │            │   (Puerto 8083)   │
+                                    │  (Orquestador TX) │            │  (Spring Batch)   │
+                                    └─────────┬─────────┘            └───────────────────┘
+                                              │
+                                              │ (Eventos Asíncronos)
+                                              ▼
+                                    ┌───────────────────┐
+                                    │   Apache Kafka    │
+                                    │   (Puerto 9092)   │
+                                    │   (Modo KRaft)    │
+                                    └───────────────────┘
 ```
 
-1. **`auth-service` (Puerto 9000):** Servidor de autorización centralizado bajo OAuth 2.0 (Spring Authorization Server). Emite tokens JWT firmados asimétricamente (RS256) con scopes bancarios (`banco.read`, `banco.write`).
-2. **`account-service` (Puerto 8081):** Microservicio de gestión de cuentas bancarias. Implementa persistencia relacional en memoria (H2) y proceso automatizado de ingesta/saneamiento de datos legados vía archivo CSV.
-3. **`transfer-service` (Puerto 8082):** Orquestador transaccional que valida fondos, debita en origen, acredita en destino, publica eventos asíncronos y protege la comunicación mediante tolerancia a fallos.
-4. **`kafka` (Puerto 9092):** Broker de mensajería distribuida en modo KRaft que recibe y distribuye los eventos de auditoría y transferencias completadas.
+### Componentes del Ecosistema
+
+1. **`bff-service` (Puerto 8080):** Capa de agregación y fachada multicanal (Backend for Frontend). Adapta y optimiza las respuestas para clientes Web, Móvil y Cajeros Automáticos (ATM), propagando los tokens OAuth2 hacia los microservicios internos.
+2. **`auth-service` (Puerto 9000):** Servidor centralizado de autorización bajo OAuth 2.0 (Spring Authorization Server). Emite tokens JWT firmados asimétricamente (RS256) con scopes bancarios (`banco.read`, `banco.write`, `read`, `write`).
+3. **`account-service` (Puerto 8081):** Microservicio de gestión de cuentas bancarias. Implementa persistencia relacional en memoria (H2), carga/saneamiento de datos legados vía CSV y endpoints de consulta protegidos.
+4. **`customer-service` (Puerto 8084):** Microservicio encargado del catálogo maestro de clientes bancarios, con endpoints REST protegidos y base de datos desacoplada.
+5. **`batch-service` (Puerto 8083):** Procesamiento masivo de datos mediante Spring Batch. Ejecuta jobs automatizados para conciliación de transacciones diarias, cálculo de intereses y emisión de estados de cuenta.
+6. **`transfer-service` (Puerto 8082):** Orquestador transaccional que valida fondos, ejecuta débitos/créditos, publica eventos asíncronos y aplica tolerancia a fallos mediante Circuit Breaker.
+7. **`kafka` (Puerto 9092):** Broker de mensajería distribuida en modo KRaft que gestiona los tópicos de auditoría y transferencias.
 
 ---
 
 ## 🚀 Requisitos e Integraciones Principales
 
-* **Seguridad OAuth 2.0 / JWT:** Protección de endpoints con Resource Server (`@PreAuthorize`) y validación de scopes bancarios.
-* **Ingesta Legacy:** Carga y saneamiento de registros contables al inicio del ciclo de vida (`CsvAccountLoader`).
-* **Tolerancia a Fallos (Resilience4j):** Patrón **Circuit Breaker** y **Fallback** implementado en `AccountClientService` para mitigar indisponibilidad o latencia en el servicio de cuentas.
-* **Arquitectura Orientada a Eventos:** Patrón **Producer / Consumer** mediante **Apache Kafka** sobre el tópico `banco.transferencias` para auditoría y desacoplamiento transaccional.
-* **Contenerización:** `Dockerfile` multi-stage para cada microservicio y orquestación centralizada vía `docker-compose.yaml`.
+- **Seguridad OAuth 2.0 / JWT:** Arquitectura centralizada de autenticación. Los microservicios operan como Resource Servers (`@PreAuthorize`) validando firmas mediante JWKS.
+- **Patrón Backend for Frontend (BFF):** Consolidación de canales Web, Mobile y ATM con propagación segura del header `Authorization`.
+- **Procesamiento Batch:** Arquitectura Chunk-oriented con Spring Batch para transacciones y conciliaciones de alto volumen.
+- **Tolerancia a Fallos (Resilience4j):** Patrón **Circuit Breaker** y **Fallback** en `transfer-service` ante degradación de `account-service`.
+- **Arquitectura Basada en Eventos:** Patrón **Producer / Consumer** sobre Apache Kafka (`banco.transferencias`) para auditoría y desacoplamiento.
+- **Contenerización Total:** Dockerfiles multi-stage y orquestación unificada mediante Docker Compose.
 
 ---
 
 ## 🛠️ Tecnologías Utilizadas
 
-* **Java 17**
-* **Spring Boot 3** (Web, Security, OAuth2 Resource Server, Data JPA)
-* **Resilience4j** (Circuit Breaker, AOP)
-* **Apache Kafka & Spring Kafka** (Confluent Platform 7.5.0 en modo KRaft)
-* **H2 Database**
-* **Docker & Docker Compose**
+- **Java 17**
+- **Spring Boot 3** (Web, Security, OAuth2 Resource Server, Data JPA, Spring Batch)
+- **Resilience4j** (Circuit Breaker, TimeLimiter)
+- **Apache Kafka & Spring Kafka** (Confluent Platform en modo KRaft)
+- **H2 Database** (Persistencia relacional en memoria)
+- **Docker & Docker Compose**
 
 ---
 
@@ -60,11 +83,15 @@ El ecosistema está compuesto por cuatro componentes desplegados en una red inte
 banco-xyz-cloud/
 │
 ├── auth-service/           # Servidor de Autorización OAuth 2.0
-├── account-service/        # Gestión de cuentas y saneamiento CSV
-├── transfer-service/       # Orquestador, Resiliencia y Eventos Kafka
-├── docker-compose.yaml     # Orquestación de infraestructura y microservicios
-├── .gitignore              # Exclusiones de Git
-└── README.md               # Documentación técnica
+├── bff-service/            # Fachada y adaptación de canales (Web, Mobile, ATM)
+├── account-service/        # Cuentas bancarias y saneamiento CSV
+├── customer-service/       # Maestro de clientes bancarios
+├── batch-service/          # Procesos batch y tareas programadas
+├── transfer-service/       # Orquestación de transferencias y Kafka
+├── docker-compose.yml      # Orquestación de los 7 contenedores
+├── instrucciones.md        # Guía paso a paso para pruebas locales
+├── despliegue.md           # Guía de despliegue en nube empresarial
+└── README.md               # Documentación general del ecosistema
 ```
 
 ---
@@ -84,7 +111,7 @@ docker compose up --build -d
 ```bash
 docker compose ps
 ```
-Los 4 contenedores (`auth-service`, `account-service`, `transfer-service` y `kafka`) deben reportar estado `Up`.
+Los 7 contenedores (`auth-service`, `account-service`, `transfer-service`, `kafka`, `bff-service`, `customer-service`, `batch-service`) deben reportar estado `Up`.
 
 ---
 
@@ -94,22 +121,48 @@ Los 4 contenedores (`auth-service`, `account-service`, `transfer-service` y `kaf
 * **Método:** `POST`
 * **URL:** `http://localhost:9000/oauth2/token`
 * **Authorization:** `Basic Auth`
-  * Username: `backend-client`
-  * Password: `secret-password`
+  * Username: `banco-client`
+  * Password: `banco-secret`
 * **Body (`x-www-form-urlencoded`):**
   * `grant_type`: `client_credentials`
   * `scope`: `banco.read banco.write`
 
 ---
 
-### 2. Consultar Saldo Inicial
+### 2. Adaptacion de Canales BFF
+* **Canal Móvil:** GET http://localhost:8080/api/bff/mobile/cuentas/137
+
+* **Canal Web:** GET http://localhost:8080/api/bff/web/cuentas/137
+
+* **Canal ATM:** GET http://localhost:8080/api/bff/atm/cuentas/137
+
+* **Authorization:** Bearer Token <ACCESS_TOKEN>
+
+---
+
+### 3. Maestro de Clientes
+* **Listar Clientes:** GET http://localhost:8084/api/customers
+
+---
+
+### 4. Procesamiento Batch
+* **Transacciones Diarias:** POST http://localhost:8083/api/jobs/transacciones-diarias
+
+* **Intereses Mensuales:** POST http://localhost:8083/api/jobs/intereses-mensuales
+
+* **Estados de Cuenta:** POST http://localhost:8083/api/jobs/estados-cuenta
+
+--
+
+
+### 5. Consultar Saldo Inicial
 * **Método:** `GET`
 * **URL:** `http://localhost:8081/api/accounts/137`
 * **Authorization:** `Bearer Token` `<TU_ACCESS_TOKEN>`
 
 ---
 
-### 3. Procesar Transferencia Transaccional
+### 6. Procesar Transferencia Transaccional
 * **Método:** `POST`
 * **URL:** `http://localhost:8082/api/transfers`
 * **Authorization:** `Bearer Token` `<TU_ACCESS_TOKEN>`
@@ -126,7 +179,7 @@ Los 4 contenedores (`auth-service`, `account-service`, `transfer-service` y `kaf
 
 ---
 
-### 4. Verificar Eventos Asíncronos en Apache Kafka
+### 7. Verificar Eventos Asíncronos en Apache Kafka
 Revisa los logs del contenedor para constatar la publicación del evento y el consumo de auditoría:
 ```bash
 docker compose logs transfer-service --tail=30
@@ -139,7 +192,7 @@ Trazas esperadas:
 
 ---
 
-### 5. Demostración de Resiliencia (Circuit Breaker con Resilience4j)
+### 8. Demostración de Resiliencia (Circuit Breaker con Resilience4j)
 
 1. Detén el microservicio de cuentas:
    ```bash

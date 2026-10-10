@@ -5,7 +5,6 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.jose.jws.SignatureAlgorithm;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
@@ -18,19 +17,26 @@ public class ResourceServerConfig {
     private String jwkSetUri;
 
     @Bean
-public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
-    http
-        .csrf(csrf -> csrf.disable())
-        .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-        .authorizeHttpRequests(auth -> auth
-            .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/accounts/**").hasAuthority("SCOPE_banco.read")
-            .requestMatchers(org.springframework.http.HttpMethod.POST, "/api/accounts/**").hasAuthority("SCOPE_banco.write")
-            .anyRequest().authenticated()
-        )
-        .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()));
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        http
+            // 1. Deshabilitar CSRF (para llamadas REST y consola H2)
+            .csrf(csrf -> csrf.disable())
 
-    return http.build();
-}
+            // 2. Permitir el renderizado de frames en el navegador para H2 Console
+            .headers(headers -> headers.frameOptions(frame -> frame.disable()))
+
+            // 3. Reglas de autorización
+            .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/h2-console/**").permitAll()
+                .requestMatchers("/api/accounts/**").authenticated() // o permitAll() si no exiges token directo
+                .anyRequest().permitAll()
+            )
+
+            // 4. Mantener la validación OAuth2 Resource Server (JWT)
+            .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()));
+
+        return http.build();
+    }
 
     @Bean
     public JwtDecoder jwtDecoder() {
